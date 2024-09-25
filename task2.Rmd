@@ -1,0 +1,851 @@
+---
+title: 'APOCALYPSE NOW (II)'
+subtitle: 'Time Series Analysis: Atmospheric C02 concentration'
+author: "Gorka Campandegui García and Jonathan Askey"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r, fig.align="center" ,out.width="100%" , fig.align = "center" , echo=FALSE, warning=FALSE}
+# Load the library knitr
+library("knitr")
+
+# Include the picture
+include_graphics("apocalypse.jpg")
+```
+
+\newpage
+
+\tableofcontents
+
+\newpage
+
+# 1. INTRODUCTION
+
+In this project, we will continue working with our data from task 1, attempting to fit a model to time series data of atmospheric CO2 concentrations over the last several decades. However, unlike task 1, we will focus on applying AutoRegressive Integrated Moving Average (ARIMA) as well as using bootstrap resampling techniques to estimate parameters for these models. The hopes of applying these different models is improving our ability to better explain the time series, and hence, the accuracy of our predictions.
+
+Then, we will take a brief look at Vector AutoRegressive (VAR) models, analyzing the possible relationship between the time series data of atmospheric methane gas and CO2. Knowing the relationship between atmospheric gases could be beneficial in developing preventative measures to ever-increasing global temperature. For example, if one gas is more difficult to target its removal from the atmosphere, perhaps it would be logical to direct more energy and resources to capturing the other gas, especially if it has an effect on the more difficult gas concentration. Furthermore, the relationship may provide insights to natural phenomena caused by, say, the increase in methane, and how these phenomena in turn lead to such events that cause more or less carbon dioxide in the atmosphere.
+
+## 1.1. First look at the data
+
+```{r, comment=""}
+# Load the data
+data <- read.csv("co2_mm_mlo_prepared.csv", sep=",")
+
+# Check if there is any missing value
+sum(is.na(data))
+```
+
+There is no missing data in our dataset. Now let's create and plot the time series object that we are going to be using throughout this project.
+
+```{r, comment=""}
+# Create our time series object. freq=12 as we are working with monthly data.
+ts <- ts(data[4], start=c(1958,3), freq=12)
+
+# Plot the time series
+ts.plot(ts, col="darkblue", ylab="CO2 concentration",
+        main="Atmospheric CO2 concentration (ppm)")
+```
+
+At a glace, we can observe several things:
+
+* There exists a positive trend in the data, in other words, the atmospheric CO2 concentration has been increasing for the last 65 years.
+* This trend is faster than linear; it may be even quadratic or exponential.
+* There is a seasonal component in the data: the atmospheric CO2 concentration varies in the same way every year. 
+
+## 1.2. Train - test split
+
+In order to make predictions, we are going to split the data into a training and a testing set. The training set will contain data until December 2019, and the testing set will consist on data from the last 4 years (2020, 2021, 2022 and 2023).
+
+```{r, comment=""}
+# Split the data into train and test
+# Observation 742 corresponds to December 2019
+ts_train <- ts(data[1:742,4], start=c(1958,3), freq=12)
+ts_test <- ts(data[743:nrow(data),4], start=c(2020,1), freq=12)
+
+# Plot the time series
+ts.plot(ts_train, ts_test, col=c("darkblue","deepskyblue"), ylab="CO2 concentration",
+        main="Train-test split of the original series")
+legend("topleft", legend=c("Train", "Test"), col=c("darkblue", "deepskyblue"),
+       lty=1, lwd=2)
+```
+
+\newpage
+
+# 2. ARIMA MODELS
+
+In this section, we will make use of the ARIMA family of models to forecast the atmospheric CO2 concentration. We will first try to build the most appropriate model deducing the parameters step by step, and then apply an automatic algorithm that selects the parameters that best fit the data.
+
+We have to take into account the following insights and findings from the previous section and the previous assignment:
+
+* The series have a seasonality of 12 months.
+* There exists a clear positive trend in the data.
+* This trend is best captured by a quadratic polynomial.
+* The variability is constant over time.
+
+Taking this into account, we will use an $ARIMA(P,D,Q)s \times (p,d,q)$, that is, an ARIMA model with seasonality. There is a parameter that is clearly determined: $s=12$. Now let's try to determine the rest.
+
+## 2.1. Detrending the series
+
+First of all, we will start differentiating the series to reduce the trend:
+
+```{r, comment=""}
+# Differentiate the series once
+ts_train_diff <- diff(ts_train)
+
+# Plot the differentiated series
+ts.plot(ts_train_diff, col="darkblue", ylab="CO2 concentration (lag1)",
+        main="Differentiated series (lag 1)")
+```
+
+We see that the trend has been completely deleted from the time series. However, we still see a clear seasonal pattern, therefore we will apply a differentiation with $lag=s=12$:
+
+```{r, comment=""}
+# Differentiate the series once
+ts_train_diff2 <- diff(ts_train_diff, lag=12)
+
+# Plot the differentiated series
+ts.plot(ts_train_diff2, col="darkblue", ylab="CO2 concentration (lags 1 and 12)",
+        main="Differentiated series (lags 1 and 12)")
+```
+
+Now we see a series with no apparent pattern, similar to a White Noise. Once we have differentiated the series twice, we are left supposedly with the $ARMA$ part, so we will apply the Augmented Dickey-Fuller test to make sure that these differentiations have made our series stationary:
+
+```{r, comment="", warning=FALSE}
+# Load the library tseries
+library(tseries)
+```
+
+```{r, warning=TRUE, comment=""}
+# Perform the augmented Dickey-Fuller test
+adf.test(ts_train_diff2)
+```
+
+The Augmented Dickey-Fuller test is giving a p-value smaller than 0.01, hence we can assume that the differentiated series is stationary. Therefore, we have determined $D=d=1$.
+
+## 2.2. ACF and PACF plots
+
+The next step is to plot the ACF and PACF:
+
+```{r, comment="", warning=FALSE}
+# Load library forecast
+ library(forecast)
+
+# Plot the ACF
+Acf(ts_train_diff2, main="ACF CO2 concentration (diff 1, 12)", ylab="ACF")
+ 
+# Plot the PACF
+Pacf(ts_train_diff2, main="PACF CO2 concentration (diff 1, 12)", ylab="PACF")
+```
+
+Looking just at the first lags, we observe a quick decay after lag 1 in the ACF and an exponential decay in the PACF, therefore we could think of a $MA(1)$ model, hence setting $p=0$ and $q=1$. For the seasonal part, we observe also a quick decay after lag 12, and in the PACF we clearly notice a significant peak at lag 24, so we could think of another $MA(1)$ process. Nonetheless, these ACF and PACF plots are often difficult to interpret and establishing the parameters is subjective, so we have to try several models and see how they behave.
+
+## 2.3. Automatic identification with `auto.arima`
+
+Some $ARIMA(P,D,Q)s \times (p,d,q)$ models that we could try are the following:
+
+* $ARIMA(0,1,1)_{12} \times (0,1,1)$, the one we have deduced from the ACF and PACF.
+* $ARIMA(1,1,1)_{12} \times (1,1,1)$, considering two $ARMA(1,1)$ processes.
+* $ARIMA(2,1,2)_{12} \times (1,1,1)$, considering an $ARMA(1,1)$ and an $ARMA(2,2)$ for the seasonal part, considering that the peaks in the seasonal part are stronger than the peaks in the first lags.
+
+What seems clear is that $s=12$, $d=D=1$, and $q,Q\ge1$.
+
+Now let's consider the `auto.arima` function, which gives us the model that best fits the data according to an information criteria using an automatic procedure:
+
+```{r, comment=""}
+# Select the best model with auto.arima on undifferentiated training set
+auto.aicc <- auto.arima(ts_train, trace = T)
+auto.aicc
+```
+
+We have to take into account that the notation is different: the `auto-arima` is considering $ARIMA(p,d,q)\times(P,D,Q)[s]$ models. From this output we get the following information:
+
+* The algorithm is making a grid search around some models that it considers good.
+* All of them have $D=d=1$ and $s=12$, so our choices for these three parameters have been correct.
+* The three models that we have proposed have been considered, having a score of 441.0764, 410.8507 and 390.3914, respectively. 
+* The best model is $ARIMA(1,1,1)(2,1,2)[12]$ according to the $AICc$ information criteria.
+
+Let's repeat the analysis using the $BIC$:
+
+```{r, comment=""}
+# Select the best model with auto.arima
+auto.bic <- auto.arima(ts_train, trace = T, ic="bic")
+auto.bic
+```
+
+According to the Bayesian Information Criteria ($BIC$), the best model is $ARIMA(1,1,1)(2,1,1)[12]$. 
+
+## 2.4. Diagnosis of the model assumptions
+
+Before making predictions and comparing the models in terms of $MSE$, we will check that these two models meet the assumptions of the seasonal ARIMA models. 
+
+First of all, we plot and compute the mean of the residuals:
+
+```{r}
+# Plot the residuals
+plot(residuals(auto.aicc), col="darkblue")
+plot(residuals(auto.bic), col="darkblue")
+```
+
+The residuals appear to be centered around 0 with constant variance.
+
+```{r, comment=""}
+# Compute the means of the residuals
+mean(residuals(auto.aicc))
+mean(residuals(auto.bic))
+```
+
+The means of the residuals are close to 0. We plot their ACF:
+
+```{r}
+# Show ACF plot for best model according to AICc
+Acf(residuals(auto.aicc), main="ACFof the residuals of the best model according to AICc",
+    ylab="ACF")
+```
+
+All the autocorrelations are inside the confidence band, therefore, it is a signal that the residuals are not correlated.
+
+```{r}
+# Show ACF plot for best model according to BIC
+Acf(residuals(auto.bic), main="ACFof the residuals of the best model according to BIC",
+    ylab="ACF")
+```
+
+In the case of the best model according to the $BIC$, again, lll the autocorrelations are inside the confidence band, and this is a signal that the residuals are not correlated.
+
+To verify this, we use the Ljung-Box test:
+
+```{r, comment=""}
+# Ljung-Box test for 1 lag
+Box.test(residuals(auto.aicc), type="Ljung-Box")
+Box.test(residuals(auto.bic), type="Ljung-Box")
+
+# Ljung-Box test for 2 lags
+Box.test(residuals(auto.aicc), type="Ljung-Box", lag=2)$p.value
+Box.test(residuals(auto.bic), type="Ljung-Box", lag=2)$p.value
+
+# Ljung-Box test for 3 lags
+Box.test(residuals(auto.aicc), type="Ljung-Box", lag=3)$p.value
+Box.test(residuals(auto.bic), type="Ljung-Box", lag=3)$p.value
+```
+
+The $p-value$ are very high, therefore there is no evidence to reject the null hypothesis of independence of the residuals.
+
+We finally check the normality of the residuals:
+
+```{r}
+# Show histograms of residuals
+hist(residuals(auto.aicc), col="lightblue", breaks=20)
+hist(residuals(auto.bic), col="lightblue", breaks=20)
+```
+
+Both histograms show a bell-shaped curve. We plot also the qq-plots:
+
+```{r}
+# Show qqplots of residuals
+qqnorm(residuals(auto.aicc),main="QQ-plot of the residuals (AICc)",
+       xlab="Theoretical quantiles", ylab="Sample quantiles")
+qqline(residuals(auto.aicc),col="red")
+```
+
+```{r}
+# Show qqplots of residuals
+qqnorm(residuals(auto.bic),main="QQ-plot of the residuals (AICc)",
+       xlab="Theoretical quantiles", ylab="Sample quantiles")
+qqline(residuals(auto.bic),col="red")
+```
+
+In both cases, we observe that the residuals follow quite well the straight line, except for some little deviations at the extremes. Let's use Jarque-Bera and Shapiro-Wilk tests for normality:
+
+```{r, comment=""}
+# Jarque-Bera test for residuals from auto.aicc
+jarque.bera.test(residuals(auto.aicc))
+
+# Jarque-Bera test for residuals from auto.bic
+jarque.bera.test(residuals(auto.bic))
+```
+
+The $p-value$ is small in both cases, and the null hypothesis would be rejected if $\alpha=0.05$, but accepted for $\alpha=0.005$. Let's use the Shapiro-Wilk test:
+
+```{r, comment=""}
+# Shapiro-Wilk test for residuals from auto.aicc
+shapiro.test(residuals(auto.aicc))
+
+# Shapiro-Wilk test for residuals from auto.bic
+shapiro.test(residuals(auto.bic))
+```
+
+In this tests, as $\alpha > 0.05$, we can assume normality of the residuals in both models.
+
+Summing up, we have enough evidence to state that the residuals are independent and normally distributed with mean 0 and constant variance, therefore, both models meet the assumptions of the seasonal ARIMA models. In order to select one of them, we will use the Mean Squared Error as performance metric.
+
+## 2.5. Comparison of the models by means of $MSE$
+
+We will make use of both models to make predictions and compare their performance using the Mean Squared Error ($MSE$). 
+
+```{r, comment=""}
+# Make predictions
+pred.aicc <- auto.aicc %>% forecast(h=48, level=c(95))
+
+# Plot the predictions
+ts.plot(ts_test, pred.aicc, lwd=1.5,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast with ARIMA(1,1,1)(2,1,2)[12] (AICc)")
+legend("topleft", legend=c("Observed data", "Prediction",
+                           "Prediction (lower 95%)", "Prediction (upper 95%)"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=2)
+```
+
+In this plot we observe the predictions vs. the observed data: the predictions are very very good. The confidence intervals are quite narrow in general but they tend to be looser in the last predicted years. Let's compute the $MSE$:
+
+```{r, comment=""}
+# Compute the MSE
+mean((ts_test-pred.aicc$mean)^2)
+```
+
+This $MSE$ is really low, in fact it is lower than the lowest one obtained in the previous assignment (0.178 with Holt-Winters models). Therefore, up to this point, $ARIMA$ models have performed better than Holt-Winters, deterministic models, harmonic models, Neural Networks and Machine Learning autorregressive models. 
+
+Let's now repeat the forecast for the ARIMA model obtained using the $BIC$:
+
+```{r, comment=""}
+# Make predictions
+pred.bic <- auto.bic %>% forecast(h=48, level=c(95))
+
+# Plot the predictions
+ts.plot(ts_test, pred.bic, lwd=1.5,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast with ARIMA(1,1,1)(2,1,1)[12] (BIC)")
+legend("topleft", legend=c("Observed data", "Prediction",
+                           "Prediction (lower 95%)", "Prediction (upper 95%)"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=2)
+```
+
+Again, the predictions are very very good.
+
+```{r, comment=""}
+# Compute the MSE
+mean((ts_test-pred.bic$mean)^2)
+```
+
+And the $MSE$ is even a little bit smaller.
+
+## 2.6. Forecasts for 2030 & 2050 with best model according to BIC
+
+We consider the model with lowest $BIC$ the best one up to this point, so we are going to train the model with the whole data and make predictions for 2030:
+
+```{r, comment=""}
+# Define the model
+model.best <- ts %>% Arima(order=c(1,1,1), seasonal=list(order=c(2,1,1), period=12))
+
+# Make predictions
+pred.best <- model.best %>% forecast(h=12*7, level=c(95))
+
+# Convert it to time series object
+pred <- ts(pred.best$mean, start = c(2024,1), freq=12)
+pred.upper95 <- ts(pred.best$upper, start = c(2024,1), freq=12)
+pred.lower95 <- ts(pred.best$lower, start = c(2024,1), freq=12)
+
+# Plot the predictions
+ts.plot(ts, pred, pred.lower95, pred.upper95, lwd=1.5,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), xlab="Time",
+        ylab="CO2 concentration",
+        main="Forecast with ARIMA(1,1,1)(2,1,1)[12] (BIC) - 2030")
+legend("topleft",
+       legend=c("Observed data", "Prediction", "Prediction (lower 95%)",
+                "Prediction (upper 95%)"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=2)
+```
+
+We repeat the forecast for 2050:
+
+```{r, comment=""}
+# Make predictions
+pred.best <- model.best %>% forecast(h=12*27, level=c(95))
+
+# Convert it to time series object
+pred <- ts(pred.best$mean, start = c(2024,1), freq=12)
+pred.upper95 <- ts(pred.best$upper, start = c(2024,1), freq=12)
+pred.lower95 <- ts(pred.best$lower, start = c(2024,1), freq=12)
+
+# Plot the predictions
+ts.plot(ts, pred, pred.lower95, pred.upper95, lwd=1.5,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), xlab="Time",
+        ylab="CO2 concentration",
+        main="Forecast with ARIMA(1,1,1)(2,1,1)[12] (BIC) - 2050")
+legend("topleft",
+       legend=c("Observed data", "Prediction", "Prediction (lower 95%)",
+                "Prediction (upper 95%)"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=2)
+```
+
+In the best case scenario (lower bound of the 95% CI), the atmospheric CO2 concentration in 2050 would be around 470 ppm (recall that the pre-industrial era CO2 concentration was 278 ppm). In mean, the concentration would be around 485-490 ppm, and in the worst case scenario, of around 500-505 ppm. This predictions are very worrying, because, even in the best case scenario, the CO2 levels would continue raising at a worrisome rate.
+
+## 2.7. Ensemble model
+
+We have made predictions according to a model that fits the data very well, obtaining a very good $MSE$. However, it is often the case that the best predictions are obtained using ensemble models. Here are some models that are good in terms of AICc and BIC (approximations from `auto.arima`):
+
+|Model | AICc | BIC|
+|------|--------|---------|
+| ARIMA(1,1,2)(2,1,2)[12] | 392.1268 | 428.7302 |
+| ARIMA(1,1,2)(2,1,1)[12] | 395.6019 | 427.5883 |
+| ARIMA(1,1,1)(2,1,2)[12] | 391.1351 | 423.1215 |
+| ARIMA(0,1,2)(2,1,2)[12] | 395.1608 |          |
+| ARIMA(1,1,1)(2,1,1)[12] | 394.3454 | 421.7791 |
+
+Now, what we are going to do is to propose a weight for each of the models: $\omega = \dfrac{1}{AICc + BIC}$. Then, we divide by the sum of the weights so that they add up to 1. The ensemble predictions will be the weighted average of the predictions or each model:
+
+```{r, comment=""}
+# Define the models
+model1 <- Arima(ts_train, order=c(1,1,2), seasonal=list(order=c(2,1,2), period=12))
+model2 <- Arima(ts_train, order=c(1,1,2), seasonal=list(order=c(2,1,1), period=12))
+model3 <- Arima(ts_train, order=c(1,1,1), seasonal=list(order=c(2,1,2), period=12))
+model4 <- Arima(ts_train, order=c(0,1,2), seasonal=list(order=c(2,1,2), period=12))
+model5 <- Arima(ts_train, order=c(1,1,1), seasonal=list(order=c(2,1,1), period=12))
+
+# Compute their AICc and BIC
+aicc <- c(model1$aicc, model2$aicc, model3$aicc, model4$aicc, model5$aicc)
+bic <- c(model1$bic, model2$bic, model3$bic, model4$bic, model5$bic)
+
+# Define the weights
+w <- 1/(aicc+bic)
+w <- w/sum(w)
+
+# Make the predictions
+pred.1 <- forecast(model1, h=12*7, level=c(95))$mean * w[1]
+pred.2 <- forecast(model2, h=12*7, level=c(95))$mean * w[2]
+pred.3 <- forecast(model3, h=12*7, level=c(95))$mean * w[3]
+pred.4 <- forecast(model4, h=12*7, level=c(95))$mean * w[4]
+pred.5 <- forecast(model5, h=12*7, level=c(95))$mean * w[5]
+ensemble.pred <- pred.1 + pred.2 + pred.3 + pred.4 + pred.5
+
+# Compute the MSE
+mean((ts_test-ensemble.pred)^2)
+```
+
+The $MSE$ is slightly smaller than the one obtained for the best model according to $AICc$, but a little bit higher than the one of the best model according to $BIC$. Therefore, apparently the model $ARIMA(1,1,1)(2,1,1)[12]$ has a little bit more predictive power than the ensemble model.
+
+\newpage
+
+# 3. BOOTSTRAP TECHNIQUES
+
+In this section, we are going to apply bootstrap methods to evaluate estimates and confidence intervals of the parameters of the AR(1) and MA(1) models.
+
+## 3.1. Bootstrap using residuals
+
+First, we fit the best estimate ARIMA(1,1,1) model without seasonality to our differentiated data. We remove the seasonality component since models that are more complex tend to cause errors bootstrap simulations. However, since we are fitting the data to our twice differentiated time series, we remove the integration parameter and are left with ARMA(1,1).
+
+```{r, comment=""}
+# Fit the ARIMA(1,0,1) model to the data
+(fit <- arima(ts_train_diff2, order = c(1, 0, 1)))
+```
+
+We will now run the bootstrap simulation with the residuals from the estimated ARIMA(1,0,1) fit. In this process, we are assuming that we know the model for the data, which is not true, since we are estimating it.
+
+```{r, comment=""}
+# Extract residuals and parameters from best fit ARMA model
+kk = residuals(fit)
+betaB = coef(fit)
+
+# Set number of samples to be drawn in each simulation
+N = length(ts_train_diff2)
+
+# Set number of bootstrap simulations to conduct (5000) and function to generate sample
+betaBoot = replicate(5000, {
+  
+  # Generate bootstrap sample from residuals
+  epsilonBoot = sample(kk, size = N, replace = TRUE)
+  
+  # Generate simulated data from residual sample
+  eso = arima.sim(n = N, list(arima = betaB), innov = epsilonBoot)
+  
+  # Fit ARIMA model to simulated data
+  model = arima(eso, order = c(1, 0, 1))
+  
+  # Extract coefficients from newly fitted ARIMA model 
+  coef(model)
+})
+```
+
+With the bootstrap simulation, we can extract the standard deviation and compare it to the standard error of the estimated ARIMA model.
+
+```{r, comment=""}
+# Extract standard errors for parameters based fitted ARIMA
+sdAR1 = sqrt(fit[["var.coef"]][1,1])
+sdMA1 = sqrt(fit[["var.coef"]][2,2])
+
+# Calculate standard errors for parameters based on standard deviation of bootstrap
+# methods
+sdAR1.bs = sd(betaBoot[1,])
+sdMA1.bs = sd(betaBoot[2,])
+
+cat("The standard error based on bootstrap for ar1 is: ",sdAR1.bs, "\n",
+    "The standard error based fitted model for ar1 is: ", sdAR1, "\n")
+
+cat("The standard error based on bootstrap for ma1 is: ",sdMA1.bs, "\n",
+    "The standard error based fitted model for ma1 is: ", sdMA1)
+```
+
+We note that the standard deviation based on the bootstrap model is about 2 to 3 times smaller than that of the standard error of the estimated fit for each parameter.
+
+```{r, comment=""}
+# Calculate quantile interval for ar1 parameter based on bootstrap methods
+print("95% CI for ar1")
+quantile(betaBoot[1,], probs = c(0.025, 0.975))
+
+# Calculate confidence interval for ma1 parameter based on bootstrap methods
+print("95% CI for ma1")
+quantile(betaBoot[2,], probs = c(0.025, 0.975))
+```
+
+Oddly enough, the confidence intervals generated by the bootstrap do not come close to capturing the "true parameter" values based on the estimated ARMA(1,1) model fit to the data. Now, we will make plots of the bootstrap parameter values compared to the fitted model values.
+
+```{r, message=FALSE, comment="", warning=FALSE}
+# Import library
+library(latticeExtra)
+
+# Extract the mean of the parameter ar1 from the fitted model
+meanAR1 <- fit[["coef"]][["ar1"]]
+
+# Visualize bootstrap resampling vs. actual density
+densityplot(~betaBoot[1,], plot.points = FALSE, xlab = "ar1") +
+  
+  # Add line to show parameter value from estimated ARIMA model
+  layer(panel.abline(v = 0.16, col = "red")) +
+  
+  # Add density line for true distribution of parameter
+  layer(panel.mathdensity(args = list(mean = meanAR1, sd = sdAR1), col = "black",
+                          n = 100))
+```
+
+As seen previously, the bootstrap density for ar1 (blue curve) is completely different than that of the actual density based on the fitted ARMA(1,1) model, where the true value does not even appear in the plot boundaries. In fact, the fitted ARMA(1,1) density of parameter values (black curve) does not at all intersect with that of the bootstrap.
+
+```{r, comment=""}
+# Extract the mean of the parameter ar1 from the fitted model
+meanMA1 <- fit[["coef"]][["ma1"]]
+
+# Visualize bootstrap resampling vs. actual density
+densityplot(~betaBoot[2,], plot.points = FALSE, xlab = "ma1") +
+  
+  # Add line to show parameter value from estimated ARIMA model
+  layer(panel.abline(v = -0.53, col = "red")) +
+  
+  # Add density line for true distribution of parameter
+  layer(panel.mathdensity(args = list(mean = meanMA1, sd = sdMA1), col = "black",
+                          n = 100))
+```
+
+We encounter the same situation for the ma1 parameter. We conclude that the initial ARMA(1,1) model that we supposed "generated" the twice differentiated data was not the correct model. This does not come as too much surprise, given that to be able to run the above code, we could not use the best model we had previously determined with seasonality.
+
+## 3.2. Bootstrap by moving blocks
+
+In the bootstrap using blocks method, we suppose that the re-sampling technique that chooses "blocks" or sequences of the data preserves the structure and dependencies of the data in the original time series. This method has an advantage over the residual resampling since we are not assuming we know the model from which the data is generated. We begin by selecting the optimal block length.
+
+```{r, comment="", warning=FALSE}
+# Import library
+library(blocklength)
+
+# Determine optimal blocklength
+Len = pwsd(ts_train, round = TRUE, correlogram = FALSE)
+(blockLen = Len$BlockLength[1])
+```
+
+The optimal block length according to the Polis and White Spectral Density selection is 49. Now, we will perform bootstrap resampling.
+
+```{r, comment=""}
+# Set length of the time series
+N = length(ts_train_diff2)
+
+# Determine number of blocks in the training set of the time series
+blockNum = round(N/blockLen)
+
+# Set number of bootstrap resamples to conduct (5000) and function to generate sample
+betaBlock = replicate(5000, {
+  
+  # Generate sample of indices for the starting point of each block to be sampled
+  start = sample(1:(N - blockLen + 1), size = blockNum, replace = TRUE)
+  
+  # For each starting point index, create vector of indices for the block of
+  # size blockNum
+  blockedIndices = c(sapply(start, function(x) seq(x, x + blockLen - 1)))
+  
+  # Extract sample based on indices from ts_train
+  eso = ts_train_diff2[blockedIndices]
+  
+  # Fit the optimal ARIMA model without seasonality to bootstrap sample
+  model <- arima(eso, order = c(1, 0, 1), include.mean = FALSE)
+  
+  # Extract coefficients from model
+  coef(model)
+  })
+```
+
+With the moving blocks bootstrap resampling, we extract the standard deviation for parameter ar1 and ma1.
+
+```{r, comment=""}
+# Calculate standard errors for parameters based on standard deviation of moving
+# blocks bootstrap method
+sdAR1.block = sd(betaBlock[1,])
+sdMA1.block = sd(betaBlock[2,])
+
+cat("The standard error based on moving blocks bootstrap for ar1 is: ",sdAR1.block,
+    "\n", "The standard error based fitted model for ar1 is: ", sdAR1, "\n")
+
+cat("The standard error based on bootstrap for ma1 is: ",sdMA1.block, "\n",
+    "The standard error based fitted model for ma1 is: ", sdMA1)
+```
+
+The standard errors based on moving blocks method are more similar to the estimated standard errors of the fit model compared to that of the residual bootstrap methods. In this case, the moving block method's standard errors are greater than the fitted model's.
+
+```{r, comment=""}
+# Calculate quantile interval for ar1 parameter based on bootstrap methods
+print("95% CI for ar1")
+quantile(betaBlock[1,], probs = c(0.025, 0.975))
+
+# Calculate confidence interval for ma1 parameter based on bootstrap methods
+print("95% CI for ma1")
+quantile(betaBlock[2,], probs = c(0.025, 0.975))
+```
+
+Now that we have generated the confidence intervals, which do in fact capture the estimated values for the parameter, we plot the density functions from the bootstrap method to see how it compares to the estimated density.
+
+```{r, comment=""}
+# Visualize bootstrap resampling vs. actual density
+densityplot(~betaBlock[1,], plot.points = FALSE, xlab = "ar1") +
+  
+  # Add line to show parameter value from estimated ARIMA model
+  layer(panel.abline(v = 0.16, col = "red")) +
+  
+  # Add density line for true distribution of parameter
+  layer(panel.mathdensity(args = list(mean = meanAR1, sd = sdAR1),
+                          col = "black", n = 100))
+```
+
+The moving blocks bootstrap method has generated a density curve of parameter ar1 that coincides with the estimated density for a1. Furthermore, the peak of the density curve is very well aligned with the estimated parameter value from just fitting the model.
+
+```{r, comment=""}
+# Visualize bootstrap resampling vs. actual density
+densityplot(~betaBlock[2,], plot.points = FALSE, xlab = "ma1") +
+  
+  # Add line to show parameter value from estimated ARIMA model
+  layer(panel.abline(v = -0.53, col = "red")) +
+  
+  # Add density line for true distribution of parameter
+  layer(panel.mathdensity(args = list(mean = meanMA1, sd = sdMA1),
+                          col = "black", n = 100))
+```
+
+We have a similar case for ma1 that the generated density curve is very good. The curve is slightly right-skewed but its peak practically perfectly corresponds with the estimate from fitting the ARMA(1,1) model.
+
+## 3.3. Predictive modeling
+
+Because of its superior performance, we will use moving block bootstrap resampling to make a predictive model. We start off by generating simulations of the time series.
+
+```{r, message=FALSE, comment="", warning=FALSE}
+library(forecast)
+library(ggplot2)
+
+# Declare number of bootstrap replications 
+nsim = 200
+
+# Generate bootstrap samples using moving blocks
+sim = bld.mbb.bootstrap(ts_train_diff2, nsim, block_size = blockLen)
+```
+
+Now that we have generated our bootstrap resmples, we will fit an ARIMA(1,0,1) model to the simulation and then simulate data from the new model.
+
+```{r, comment=""}
+# Declare many points out to simulate
+h = 12
+
+# Declare matrix to store simulations
+future = matrix(0, nrow = nsim, ncol = h)
+
+# For each sample, fit an ARIMA(1,0,1), simulate from that model and store it in
+# the matrix future
+for (i in seq(nsim)) {
+  future[i,] = simulate(arima(sim[[i]], order = c(1, 0, 1), include.mean = FALSE),
+                        nsim = h)
+}
+
+# Select starting value to simulate
+start = 2020
+
+# Create list with mean and 95% CI based on simulations
+simfc = structure(list(mean = ts(colMeans(future), start = start, frequency = 12),
+                       lower = ts(apply(future, 2, quantile, prob = 0.025),
+                                  start = start, frequency = 12),
+                       upper = ts(apply(future, 2, quantile, prob = 0.975),
+                                  start = start, frequency = 12),
+                       level = 95),
+                  class = "forecast")
+
+# Show list of simulations for twice differentiated time series residuals
+simfc
+```
+
+We plot the simulated predictions.
+
+```{r, comment=""}
+# Make plot with simulated predictions
+autoplot(kk) + ggtitle("Simulated ARMA(1,1)") + xlab("Year") + ylab("residual") +
+  autolayer(simfc, series = "Simulated")
+```
+
+First, we note that this data is for our twice differentiated time series. Therefore, we interpret these predictions as the estimated residuals of the fitted ARMA(1,1) model. Notice that 95% CI is quite wide for these predictions.
+
+\newpage
+
+# 4. VAR MODELS
+
+## 4.1. Theoretical explanation
+
+VAR (Vector Auto Regressive) models are a multivariate extension of the AR (Auto Regressive) models that permit a better understanding of the relationships among variables. Suppose that $x_t$ and $y_t$ are our variables time series of interest. We could independently analyze each one of the series as an autoregressive process (of order 1) in the following way:
+
+\begin{equation*}
+x_t = c + \phi_x x_{t-1} + a_t \hspace{1cm} y_t = d + \phi_y y_{t-1} + b_t
+\end{equation*}
+
+where $c$ and $d$ are constants to be determined, $\phi_x$ and $\phi_y$ are the parameters of the AR processes of $x_t$ and $y_t$, respectively, and $a_t$, $b_t$ are the innovations of $x_t$ and $y_t$, respectively. However, if we suspect that the variables could be related in some way, we can think of a more complex model that considers the influence of one on the other. The underlying idea is that, if we have two or several variables that are related, proposing a joint model could improve both the predictions and the explanatory power of the model. Therefore, we can propose the following VAR model (of order 1):
+
+\begin{equation*}
+\begin{cases}
+x_t = c_1 + a_{11} x_{t-1} + a_{12} y_{t-1} + a_t \\
+y_t = d_1 + a_{21} x_{t-1} + a_{22} y_{t-1} + b_t
+\end{cases}
+\end{equation*}
+
+where $c,d,a_{11},a_{12},a_{21}$ and $a_{22}$ are constants to be determined and $a_t, b_t$ are the innovations of $x_t$ and $y_t$, respectively. Letting $z_t = (x_t,y_t)'$ be the multivariate time series, we can write this model in matrix form in the following equivalent way:
+
+\begin{equation*}
+z_t = c + A z_{t-1} + a_t
+\end{equation*}
+
+where $A=\begin{pmatrix} a_{11} & a_{12} \\ a_{21} & a_{22}\end{pmatrix}$, $c=(c_1,d_1)'$ and $a_t=(a_t,b_t)'$. If the VAR model is of order $p$ and the series is composed by $k$ univariate time series, we write the following:
+
+\begin{equation*}
+z_t = c + A_1 z_{t-1} + A_2 z_{t-2} + \cdots + A_p z_{t-p} + a_t
+\end{equation*}
+
+where $z_t$ is our ($k$-dimensional) multivariate time series of interest, $a_t$ are the ($k$-dimensional) innovations and $A_i$ are matrices of dimension $k\times k$, for $i=1,2,...,p-1,p$. This model is denoted VAR(p).
+
+The VAR(p) model has the following assumptions:
+
+* The parameters are linear and constant over time.
+* The residuals $a_t$ are normally distributed with mean 0 and constant variance: $a_t \sim N(0, \Sigma)$.
+* There is no correlation across time for the errors: $Cov[a_t, a_{t-k}]=0, \forall k\ge 1$.
+
+## 4.2. VAR model for CO2 and CH4
+
+Throughout this project (and also in the previous assignment) we have been working with the univariate time series of the atmospheric CO2 concentration, measured by the NOAA (National Oceanographic and Atmospheric Administration) at the Mauna Loa observatory at Hawaii. In this section, we will use this series together with the atmospheric CH4 (metane) concentration, which is also one of the most problematic gases causing global warming. This CH4 concentration is measured in parts per billion (ppb).
+
+```{r, comment=""}
+# Load the data
+data2 <- read.csv("metane.csv", sep=",")
+
+# Check if there is any missing value
+sum(is.na(data2))
+```
+
+```{r, comment=""}
+# Create our time series object. freq=12 as we are working with monthly data.
+ts2 <- ts(data2[4], start=c(1983,7), freq=12)
+
+# Plot both time series
+ts.plot(ts2, col="deeppink", ylab="Concentration (ppb)",
+        main="CH4 concentration")
+```
+
+We can observe several important aspects of this series:
+
+* It has a clear positive trend, therefore, it is not stationary, as the CO2 series.
+* The trend is not linear, but rather polynomial.
+* It has a seasonality of 12 months, as the CO2 series.
+* The variability is constant over time, as the CO2 series.
+* The scale is higher for the CH4 series.
+* The series starts several years after the CO2 series, and finishes a month before, in November 2023, instead of December 2023. Therefore, we will reduce the CO2 series to the period where both quantities are measured.
+
+```{r, echo=FALSE}
+# Load dualplot function from github
+source("https://gist.githubusercontent.com/ellisp/4002241def4e2b360189e58c3f461b4a/raw/9ab547bff18f73e783aaf30a7e4851c9a2f95b80/dualplot.R")  
+```
+
+If we plotted both series together using `ts.plot`, the different scales would not let us appreciate well the relation. Therefore, we are going to plot both series together using `dualplot` (a function that is not in R libraries, but in github), which plots both series together using different scales in y axis:
+
+```{r, message=FALSE}
+# Reduce the series
+ts1 <- ts(data[305:789,4], start=c(1958,3), freq=12)
+
+# Plot
+time <- as.numeric(gsub('[^[:alnum:] ]', '', data2$decimal))/1000
+dualplot(time,ts1, ts2, ylab1 = "C02 concentration (ppm)",
+         ylab2 = "CH4 concentration (ppb)", main="Comparison of CO2 & CH4")
+```
+
+We can appreciate that both series show an increase in the common period. We can also see that the seasonal peaks occur in opposite moments of the year: when the CO2 concentration has a peak, the CH4 concentration has a valley, and viceversa. Moreover, the CH4 concentration shows less seasonal variability than the C02 concentration.
+
+Now, we estimate the VAR(1) model using `VAR` function from package `vars`.
+
+```{r, warning=FALSE, comment="", message=FALSE}
+# Create a dataframe containing both series
+ts.df <- data.frame(ts1,ts2)
+
+# Change the names of the variables in the dataframe
+colnames(ts.df) <- c("C02", "CH4")
+
+# Load the library vars
+library(vars)
+
+# Estimate the VAR(1) model
+var1 <- VAR(ts.df)
+var1
+```
+
+```{r, comment=""}
+plot(predict(var1, n.ahead=12*4, ci=0.95))
+```
+
+The VAR(1) model suggests that for every month increase in the CO2 concentration, the previous methane concentration has a 0.02 times impact on the concentration of C02, assuming its statistical significance, which is something that needs to be tested for to assure its validity.
+
+Alternatively, we can apply a VAR(2) model and compare the estimates.
+
+```{r}
+# Estimate the VAR(2) model
+var2 <- VAR(ts.df, p = 2)
+var2
+```
+
+```{r, comment=""}
+plot(predict(var2, n.ahead=12*4, ci=0.95))
+```
+
+Now, we compare the models using the likelihood ratio test since VAR(1) is a nested model of VAR(2).
+
+```{r}
+# Calculate log-likelihoods using logLik() from 'vars' package
+ll1 <- logLik(var1)
+ll2 <- logLik(var2)
+
+# Compute likelihood ratio test statistic
+stat <- 2 * (as.numeric(ll2) - as.numeric(ll1))
+
+# Compute degrees of freedom (difference in number of parameters for each model)
+df <- 10 - 6
+
+# Perform likelihood ratio test
+p_value <- 1 - pchisq(stat, df)
+
+# Print p-value
+cat("The p-value of the likelihood ratio test is: ", p_value)
+```
+
+With a p-value < 0.05, we reject the null hypothesis that there is no significant difference between VAR(2) and VAR(1) and choose to consider the more complex model VAR(2) as the better model.
+
+\newpage
+
+# 5. CONCLUSIONS
+
+The best overall model from our analysis is the $ARIMA(1,1,1)\times(2,1,1)[12]$, found using the BIC criterion and confirmed using MSE. The model had an MSE of 0.160, which is better than that of any of the models determined in our previous analysis and the ensemble model in this analysis. Based on the predictive modeling with 95% Confidence Intervals, by 2050 the concentration of global CO2 will be 485-490 ppm with CI of (470,500)ppm.
+
+Looking at the VAR models, we found inconclusive results about the direct relationship between CO2 and methane; however, further analysis would permit us to determine the statistical significance of our results.
+
+As stated before in task 1, these predictions are not a good outlook for our planet. We hope that our analysis is able to contribute against the fight against climate change in guiding action.
