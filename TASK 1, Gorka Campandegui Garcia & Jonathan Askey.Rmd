@@ -1,0 +1,872 @@
+---
+title: 'APOCALYPSE NOW'
+subtitle: 'Time Series Analysis: Atmospheric C02 concentration'
+author: "Gorka Campandegui García and Jonathan Askey"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r, fig.align="center" ,out.width="100%" , fig.align = "center" , echo=FALSE, warning=FALSE}
+# Load the library knitr
+library("knitr")
+
+# Include the picture
+include_graphics("apocalypse.jpg")
+```
+
+\newpage
+
+\tableofcontents
+
+\newpage
+
+# 1. INTRODUCTION
+
+Time series analysis has applications in a wide array of domains from estimating the size of populations to stock prices to estimating natural phenomena. Any event with a potential numerical measure over regular time intervals can be analyzed. The goal of modeling time series can be separated into two categories: descriptive analysis, which constitutes of noticing temporal patterns and anomalies in the data, and forecasting/making predictions.
+
+In this study, we will be using time series analysis techniques to describe and predict carbon dioxide (CO2) concentration levels, recorded in particles per million (ppm). We will use data taken at Mauna Loa Observatory by the National Oceanic and Atmospheric Administration (NOAA) taken monthly from March 1958 to December 2023 with the exception of the data taken from November 2022 to July 2023. These data were taken at Maunakea Observatories approximately 21 miles north of the Mauna Loa Observatory due to the eruption of the Mauna Loa Volcano.
+
+This time series, known as the Keeling curve, has famously been used to demonstrate that anthropogenic CO2 has been increasing the overall concentration of atmospheric CO2 since the industrial era. The pre-industrial era CO2 concentration was 278 ppm, now it is around 421 ppm - a 51 percent increase! As industrialization brought about large-scale fuel-burning and atmospheric pollution, it is no surprise that there has been such a stark increase. It is vital to make good predictions for this time series as atmospheric CO2 concentration is a variable included in almost every climate model. Thus, these predictions are needed to predict future societal needs, to set benchmarks and for policy-making. In other words, the insights provided by this analysis are imperative to offsetting the otherwise impending doom of humanity and majority of life on earth... We suppose that it doesn't get much more serious than that.
+
+We will try several models using different methods such as harmonic analysis, Holt-Winters smoothing techniques, Neural Networks and Machine Learning autoregressive models. The models we develop will initially be trained with data from March 1958 to December 2019  and tested on the remaining data (from January 2020 to December 2023). We will determine the comparative goodness-of-fit of our models using mean squared error ($MSE$) on the testing proportion of our data. Then, the best models will be trained on all of the available data to make farther out predictions until 2030 or 2050. Naturally, the farther out in time we predict, the greater the uncertainty that comes with the prediction.
+
+## 1.1. First look at the data
+
+```{r, comment=""}
+# Load the data
+data <- read.csv("co2_mm_mlo_prepared.csv", sep=",")
+
+# Check if there is any missing value
+sum(is.na(data))
+```
+
+There is no missing data in our dataset. Now let's create and plot the time series object that we are going to be using throughout this project.
+
+```{r, comment=""}
+# Create our time series object. freq=12 as we are working with monthly data.
+ts <- ts(data[4], start=c(1958,3), freq=12)
+
+# Plot the time series
+ts.plot(ts, col="darkblue", ylab="CO2 concentration",
+        main="Atmospheric CO2 concentration (ppm)")
+```
+
+At a glace, we can observe several things:
+
+* There exists a positive trend in the data, in other words, the atmospheric CO2 concentration has been increasing for the last 65 years.
+* This trend is faster than linear; it may be even quadratic or exponential.
+* There is a seasonal component in the data: the atmospheric CO2 concentration varies in the same way every year. 
+
+## 1.2. Train - test split
+
+In order to make predictions, we are going to split the data into a training and a testing set. The training set will contain data until December 2019, and the testing set will consist on data from the last 4 years (2020, 2021, 2022 and 2023).
+
+```{r, comment=""}
+# Split the data into train and test
+# Observation 742 corresponds to December 2019
+ts_train <- ts(data[1:742,4], start=c(1958,3), freq=12)
+ts_test <- ts(data[743:nrow(data),4], start=c(2020,1), freq=12)
+
+# Plot the time series
+ts.plot(ts_train, ts_test, col=c("darkblue","deepskyblue"), ylab="CO2 concentration",
+        main="Train-test split of the original series")
+legend("topleft", legend=c("Train", "Test"), col=c("darkblue", "deepskyblue"),
+       lty=1, lwd=2)
+```
+
+
+# 2. DETERMINISTIC MODELS & HARMONIC ANALYSIS
+
+In this section we will explore some deterministic models and select the one that best fits our data. We will also analyze the seasonality of our data, and combine the chosen deterministic model with tools from harmonic analysis. This combination will lead us to the first model with which we are going to make predictions.
+
+## 2.1. Deterministic models
+
+Applying deterministic models could be a good idea in this case, as the atmospheric concentration of CO2 is a phenomenon with a great inertia, and we see little noise in the data.
+
+### 2.1.1. Linear model
+
+First of all we are going to try a linear model:
+
+```{r, comment=""}
+# Create the linear model
+times = 1:length(ts_train)
+model1 <- lm(ts_train ~ times) 
+
+# Compute the residuals from the fit
+resi1 = model1$residuals
+
+# Plot the CO2 concentration with the linear fit
+ts.plot(ts_train, model1$fit, ylab="CO2 concentration", col=c("darkblue","deepskyblue"),
+        main="Fit of the linear model")
+legend("topleft", legend=c("Observed data", "Linear fit"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=2)
+
+# Plot the residuals
+ts_resi1 = ts(resi1, start=c(1958,3), freq=12)
+ts.plot(ts_resi1, ylab="Residuals", col="deepskyblue", lwd=1.5,
+        main="Residuals of the linear model")
+
+# Get the summary of the linear model
+summary(model1)
+```
+
+From this analysis, we conclude that:
+
+* The trend is not linear, even if the $R_a^2$ is high.
+* The model does not capture the trend and seasonality of the data, looking at the plot of the residuals.
+* If the model were right, we would be augmenting the CO2 concentration in atmosphere by 0.1358 ppm each month (in mean).
+
+### 2.1.2. Quadratic model
+
+```{r, comment=""}
+# Create the quadratic model
+model2 <- lm(ts_train ~ times + I(times^2))
+
+# Compute the residuals from the fit
+resi2 = model2$residuals
+
+# Plot the CO2 concentration with the quadratic fit
+ts.plot(ts_train, model2$fit, ylab="CO2 concentration", col=c("darkblue","deepskyblue"),
+        main="Fit of the quadratic model")
+legend("topleft", legend=c("Observed data", "Quadratic fit"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=2)
+
+# Plot the residuals
+ts_resi2 = ts(resi2, start=c(1958,3), freq=12)
+ts.plot(ts_resi2, ylab="Residuals", col="deepskyblue", lwd=1.5,
+        main="Residuals of the quadratic model")
+
+# Get the summary of the quadratic model
+summary(model2)
+```
+
+In this plots we see that the quadratic model captures the trend very well. In the plot of the residuals, we observe a seasonality, which is not captured by the model. Clearly this deterministic model is better than the linear one, in fact the adjusted $R$ squared is vey high: $R_a^2=0.9948$. Let's see if an exponential model outperforms the quadratic one.
+
+### 2.1.3. Exponential model
+
+We try the following model:
+
+$z_t = A + B \cdot e^t + a_t$
+
+```{r, comment=""}
+# We scale the times not to get infinite values
+times2 <- times/1000
+
+# Create the exponential model
+model3 <- lm(ts_train ~ I(exp(times2)))
+
+# Compute the residuals from the fit
+resi3 = model3$residuals
+
+# Plot the CO2 concentration with the exponential fit
+ts.plot(ts_train, model3$fit, ylab="CO2 concentration", col=c("darkblue","deepskyblue"),
+        main="Fit of the exponential model")
+legend("topleft", legend=c("Observed data", "Exponential fit"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=2)
+
+# Plot the residuals
+ts_resi3 = ts(resi3, start=c(1958,3), freq=12)
+ts.plot(ts_resi3, ylab="Residuals", col="deepskyblue", lwd=1.5, 
+        main="Residuals of the exponential model")
+
+# Get the summary of the exponential model
+summary(model3)
+```
+
+We observe that the exponential model is a little bit worse than the quadratic model. Even if the $R^2_a$ is very similar, we see in the plot of the residuals that there is still some trend which is not captured by the model.
+
+## 2.2. Harmonic Analysis
+
+In this section, we will apply some basic concepts from harmonic analysis to model the seasonality of our data. In this case, we are going to work with the residuals of the quadratic model (the deterministic model that best captures the trend in the data) instead of using our original series, in other words, we are going to study our detrended series.
+
+```{r, comment=""}
+# Plot the residuals
+ts.plot(ts_resi2, ylab="Residuals", col="deepskyblue", lwd=1.5,
+        main="Residuals of the quadratic model")
+```
+
+We clearly see a period of 12 months that repeats along the data. Therefore, we are going to propose the following model for the seasonality of the data:
+
+$r_t = A \cdot sin(2\pi t/12) + B \cdot cos(2\pi t/12) + a_t$
+
+```{r, comment=""}
+# Define the sine and cosine of the times
+sine = sin(times*2*pi/12)
+cosine = cos(times*2*pi/12)
+
+# Create the linear model and show the summary
+sinecosine = lm(resi2 ~ sine + cosine)
+summary(sinecosine)
+
+# Plot the resulting fit
+ts.plot(ts_resi2, sinecosine$fit, ylab="CO2 concentration", col=c("deepskyblue", "orange"),
+        main="Fit of the sine-cosine model")
+legend("topleft", legend=c("Residuals from quadratic model", "Sine-cosine fit"),
+       col=c("deepskyblue", "orange"), lty=1, lwd=2)
+
+# Plot the residuals
+resi_sinecosine = sinecosine$residuals
+ts_resi_sinecosine = ts(resi_sinecosine, start=c(1958,3), freq=12)
+ts.plot(ts_resi_sinecosine, ylab="Residuals from sine-cosine fit", col="orange", lwd=1.5,
+        main="Residuals of the sine-cosine model")
+```
+
+We see that there is still some seasonality that is not considered in the model, as there seems to exist a long term cycle that repeats twice in our series. Therefore, we are going to analyze which are the frequencies in our data:
+
+```{r, warning=FALSE, message=FALSE, comment=""}
+# Load the library TSA
+library(TSA)
+
+# Show the periodogram
+periodogram(ts_resi2, main= "Periodogram of the residuals from quadratic model")
+```
+
+In this periodogram we discover that there are 3 frequencies present in our data: 6 months, 12 months and (more or less) 30 years or equivalently 360 months. Therefore, we will propose a deterministic model which consists on a Fourier series with the mentioned frequencies.
+
+We are going to perform a regression model with sine and cosine functions:
+
+```{r, comment=""}
+# Define the sine and cosine of the times
+sine6 = sin(times*2*pi/6)
+cosine6 = cos(times*2*pi/6)
+sine12 = sin(times*2*pi/12)
+cosine12 = cos(times*2*pi/12)
+sine360 = sin(times*2*pi/360)
+cosine360 = cos(times*2*pi/360)
+
+# Create the linear model and show the summary
+harmonic = lm(resi2 ~ sine6 + cosine6 + sine12 + cosine12 + sine360 + cosine360)
+summary(harmonic)
+
+# Plot the resulting fit
+ts.plot(ts_resi2, harmonic$fit, ylab="CO2 concentration", col=c("deepskyblue", "orange"),
+        main="Fit of the harmonic model")
+legend("topleft", legend=c("Residuals from quadratic model", "Harmonic fit"),
+       col=c("deepskyblue", "orange"), lty=1, lwd=2)
+
+# Plot the residuals
+resi_harmonic = harmonic$residuals
+ts_resi_harmonic = ts(resi_harmonic, start=c(1958,3), freq=12)
+ts.plot(ts_resi_harmonic, ylab="Residuals of the harmonic fit", col="orange", lwd=1.5,
+        main="Residuals of the harmonic fit")
+```
+
+Now the residuals of the model are really close to being just noise.
+
+## 2.3. First model and predictions
+
+Finally, our first model to make predictions will be:
+
+\begin{equation*}
+z_t = \mu_t + s_t + a_t
+\end{equation*}
+
+where $\mu_t$ is the trend, modeled by `model2` (the quadratic model), $s_t$ is the seasonality in the `harmonic` model and $a_t$ is the noise observed in the last figure.
+
+```{r, comment=""}
+# Create a vector to store the times
+t <- 743:790
+
+# Create a data frame to store the sines and cosines of the times
+times_test <- data.frame(t, sin(t*2*pi/6), cos(t*2*pi/6), sin(t*2*pi/12),
+                         cos(t*2*pi/12), sin(t*2*pi/360), cos(t*2*pi/360) )
+colnames(times_test) <- c("times", "sine6", "cosine6", "sine12", "cosine12",
+                          "sine360", "cosine360")
+
+# Predict the trend with the quadratic model
+trend <- predict(model2, newdata=times_test)
+
+# Predict the seasonality with the harmonic model
+seasonality <- predict(harmonic, newdata=times_test)
+
+# Add the trend and the seasonality
+predicted_values <- as.numeric(trend + seasonality)
+
+# Transform the predictions into a time series object
+prediction <- ts(predicted_values, start=c(2020,1), frequency=12)
+
+# Plot the predictions vs. the observed data
+ts.plot(ts_test, prediction, lwd=1.5, col=c("darkblue", "deepskyblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast with deterministic-harmonic model")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=2)
+```
+
+What this figure shows is that the predictions are in general very good. However, it seems that the CO2 concentration has been a little higher than the predicted one. Let's now compute the error, using the $MSE$ (Mean Squared Error) as performance metric:
+
+```{r, comment=""}
+# Compute the MSE
+mean((ts_test-prediction)^2)
+```
+
+Now, we are going to make predictions for the following years, so that we have an idea of how could the atmospheric CO2 concentration evolve during the following 7 years (from 2024 to 2030).
+
+```{r, comment=""}
+# Create the vector of times
+t <- 791:(790+12*7)
+
+# Create a data frame with the times and the sinusoidal functions
+times_future <- data.frame(t, sin(t*2*pi/6), cos(t*2*pi/6), sin(t*2*pi/12),
+                         cos(t*2*pi/12), sin(t*2*pi/360), cos(t*2*pi/360) )
+colnames(times_future) <- c("times", "sine6", "cosine6", "sine12", "cosine12",
+                          "sine360", "cosine360")
+
+# Make the predictions for the trend
+trend_future <- predict(model2, newdata=times_future)
+
+# Predict the seasonality
+seasonality_future <- predict(harmonic, newdata=times_future)
+
+# Add the trend and the seasonality
+predicted_values_future <- as.numeric(trend_future + seasonality_future)
+
+# Convert the predictions to a time series
+prediction_future <- ts(predicted_values_future, start=c(2024,1), frequency=12)
+
+# Plot the predictions. vs the observed values
+ts.plot(ts, prediction_future, lwd=1.2, col=c("darkblue", "deepskyblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast for 2030")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+```
+
+According to these predictions, we will reach the 440 ppm of atmospheric CO2 concentration in 2030. This is obviously bad news for two reasons: on the one hand, we have seen that our model tends to underestimate, so probably the observed values will be higher. On the other hand, this predictions are made with the assumption that the emission policies remain the same (business-as-usual policies), but even if the emissions stopped today, the inertia of the physical system of the earth would make the CO2 concentration grow.
+
+But this is not the end of our horror movie. Let's now make predictions for 2050 and 2100, which is the date towards the global policies are made.
+
+```{r, comment=""}
+# Create the verctor of times
+t <- 791:(790+12*27)
+
+# Store the times and the sines and cosines in a data frame
+times_future <- data.frame(t, sin(t*2*pi/6), cos(t*2*pi/6), sin(t*2*pi/12),
+                         cos(t*2*pi/12), sin(t*2*pi/360), cos(t*2*pi/360) )
+colnames(times_future) <- c("times", "sine6", "cosine6", "sine12", "cosine12",
+                          "sine360", "cosine360")
+
+# Predict the trend with the quadratic model
+trend_future <- predict(model2, newdata=times_future)
+
+# Predict the seasonality with the harmonic model
+seasonality_future <- predict(harmonic, newdata=times_future)
+
+# Add the trend and the seasonality
+predicted_values_future <- as.numeric(trend_future + seasonality_future)
+
+# Convert the predictions to a time series object
+prediction_future <- ts(predicted_values_future, start=c(2024,1), frequency=12)
+
+# Plot predictions vs. observed
+ts.plot(ts, prediction_future, lwd=1.2, col=c("darkblue", "deepskyblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast for 2050")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+```
+
+For 2050, the atmospheric CO2 concentration would be around 500 ppm (recall that the preindustrial data was 278 ppm). In this forecast, we are predicting an interval that is around 50% of the length of our record, which is too far to predict for such a deterministic model, but it is helpful to make an idea of where are we going as society. Just for "fun", here are the predictions for 2100:
+
+```{r, comment=""}
+# Create the vector of times
+t <- 791:(790+12*77)
+
+# Create a data frame with the times, the sines and the cosines
+times_future <- data.frame(t, sin(t*2*pi/6), cos(t*2*pi/6), sin(t*2*pi/12),
+                         cos(t*2*pi/12), sin(t*2*pi/360), cos(t*2*pi/360) )
+colnames(times_future) <- c("times", "sine6", "cosine6", "sine12", "cosine12",
+                          "sine360", "cosine360")
+
+# Predict trend with the quadratic model
+trend_future <- predict(model2, newdata=times_future)
+
+# Predict seasonality with harmonic model
+seasonality_future <- predict(harmonic, newdata=times_future)
+
+# The predictions are the trend + the seasonality
+predicted_values_future <- as.numeric(trend_future + seasonality_future)
+
+# Convert the predictions to a time series object
+prediction_future <- ts(predicted_values_future, start=c(2024,1), frequency=12)
+
+# Plot the predictions vs. the observed data
+ts.plot(ts, prediction_future, lwd=1.2, col=c("darkblue", "deepskyblue"), xlab="Time",
+        ylab="CO2 concentration", main="Forecast for 2100")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+```
+
+Keeping in mind that this forecast is completely unrealistic as we predict a huge time interval, in 2100 (think that it is likely that some of our classmates are still alive for that date) the concentration would be around 700 ppm, which represents 2.5 times the concentration before the industrial era. Between 2060 and 2080, humans would have doubled the CO2 concentration in the atmosphere.
+
+# 3. HOLT-WINTERS FORECASTING
+
+A popular alternative to modeling a time series is the use of Holt-Winters smoothing techniques. For Holt-Winters, we will model the data with linear exponential smoothing parameters $\alpha$ for level and $\beta$ for trend. Then, we will create another model that includes the parameter $\gamma$ to incorporate seasonality into our model.
+
+## 3.1. Holt-Winters forecasting without seasonality
+
+First, we model Holt-Winters to our training data without taking into account seasonality.
+
+```{r, comment=""}
+# Fit non-seasonal Holt-Winters
+m = HoltWinters(ts_train, gamma=FALSE)
+m
+
+# Show the fit
+plot(m, col="darkblue",col.predicted="deepskyblue", lwd=1.2, xlab="Time",
+        ylab="CO2 concentration",main = "Holt-Winters without Seasonality")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+```
+
+Based on visual inspection, we notice fairly accurate modeling of our data. Perhaps the prediction has peaks that consistently surpass the observed data. Both the $\alpha$ and $\beta$ parameters are nearly 1, indicating that the model with best fit (i.e. minimized Sum of Squared Error) has weights that almost entirely favor the last observation for each subsequent prediction.
+
+We plot the residuals of our Holt-Winters model without seasonality.
+
+```{r, comment=""}
+# Return the MSE
+MSE = m$SSE/length(ts_train)
+MSE
+
+# Show the residuals
+resid=m$x-m$fitted[,1]
+a=ts(resid, start=c(1958,3), freq=12)
+ts.plot(a, ylab="CO2 Concentration", col="orange",
+        main="Residuals for Holt-Winters without Seasonality")
+```
+
+The model without the smoothing parameter gamma for seasonality has Mean Squared Error of 0.902 for the training data. We can see that the peaks of the residuals repeat year by year; hence, seasonality is not captured by the model, as expected. Thus, the Holt-Winters model without seasonality seems to fit the training data ok, not taking into account the seasonality.
+
+We check the performance of the Holt-Winters model without seasonality on our test data.
+
+```{r, comment=""}
+# Make predictions
+fore = predict(m, n.ahead=48, prediction.interval=T, level=0.95)
+
+# Plot predictions as continuation of ts_train
+plot(m,fore, col.predicted="deepskyblue", ylab = "CO2 Concentration",
+     main = "Non-seasonal Holt-Winters Forecast")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("black", "deepskyblue"), lty=1, lwd=1.5)
+
+# Plot predictions compared to ts_test
+ts.plot(ts_test, fore[,1],col=c("darkblue", "deepskyblue"), ylab="CO2 Concentration",
+        main="Non-seasonal Holt-Winters Forecast 2020-2024")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+
+# Calculate MSE
+mse <- mean((ts_test-fore[,1])^2)
+mse
+```
+
+For the predictions made on our test data, the $MSE$ is a whopping 1317. Of course, the prediction is a straight line due to the lack of any seasonality model. Furthermore, the "95-percent confidence interval" is enormous... underlining the uselessness of the model. The fact that the model was able to have a lower $MSE$ for the data it was trained on is likely due to the fact that it depended heavily on the newly observed data to make any prediction with parameters nearly equal to 1.
+
+## 3.2. Holt-Winters forecasting with seasonality
+
+Now, we take into consideration seasonality. Let's decompose our time series. We choose the additive model as opposed to the multiplicative model since the amplitude of the seasonal cycle seems to remain constant throughout the time series.
+
+```{r, comment=""}
+# Decompose the time series and plot the decomposition
+decomp.ts_train = decompose(ts_train, type = "additive")
+plot(decomp.ts_train)
+```
+
+The decomposition is achieved through subtracting the deterministic trend from the observed data. This yields the detrended series (not plotted here), which is the combination of the seasonal and random series. Since we have chosen the additive time series, the seasonal coefficients are determined by taking the average of the seasonal periods and subtracting it from the mean of the detrended series. Finally, the random/residuals/innovations are what's left when the seasonal components are subtracted from the detrended series. The innovations in this case appear to be random.
+
+Now, we create a model that includes seasonality.
+
+```{r, comment=""}
+# Seasonal Holt-Winters
+m2 = HoltWinters(ts_train)
+m2
+
+# Plot fitted line with observed data
+plot(m2, col="darkblue",col.predicted="deepskyblue", lwd=1.2, ylab = "CO2 Concentration",
+     main = "Seasonal Holt-Winters")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+
+# Show deconstruction of time series using Holt-Winters
+plot(fitted(m2), main = "Seasonal Holt-Winters")
+```
+
+The smoothing parameters are now significantly different than the previous model, and the observed and fitted lines almost completely overlap.
+
+Once again, we plot the residuals.
+
+```{r, comment=""}
+# Return the MSE
+MSE = m2$SSE/length(ts_train)
+MSE
+
+# Compute and plot the residuals
+resid2=m2$x-m2$fitted[,1]
+a2=ts(resid2, start=c(1958,3), freq=12)
+ts.plot(a, ylab="CO2 Concentration", col="orange",
+        main="Residuals for Holt-Winters with Seasonality")
+```
+
+The residuals do not have any trend and appear to be random (as seen before in the decomposition). There might still be an annual pattern in the residuals, but clearly smaller than in the model without seasonality. We have an $MSE$ of 0.100 for the data used to fit the line, which is better than the Holt-Winters without seasonality.
+
+We make predictions and compare with the testing data to check model accuracy.
+
+```{r, comment=""}
+# Plot predictions as continuation of ts_train
+fore2 = predict(m2, n.ahead=48, prediction.interval=T, level=0.95)
+plot(m2,fore2, col.predicted="deepskyblue", ylab = "CO2 Concentration",
+     main = "Seasonal Holt-Winters Forecast 2020-2024")
+
+# Plot predictions compared to ts_test
+ts.plot(ts_test, fore2[,1], col=c("darkblue", "deepskyblue"), ylab="CO2 Concentration",
+        main="Seasonal Holt-Winters Forecast 2020-2024")
+legend("topleft", legend=c("Observed data", "Prediction"),
+       col=c("darkblue", "deepskyblue"), lty=1, lwd=1.5)
+
+# Calculate MSE
+mse <- mean((ts_test-fore2[,1])^2)
+mse
+```
+
+Our model has an $MSE$ of 0.178, which is many folds better than the model without seasonality and more consistent with the $MSE$ it has for data used for fitting. Notice the prediction preserves the the fluctuations of the observed data. The model may tend to slightly underestimate the actual CO2 concentrations.
+
+Using all of our available data, we forecast CO2 concentrations up until the year 2060. 
+
+```{r, comment=""}
+# Create model with all available data
+m3 = HoltWinters(ts)
+
+# Make and plot distant prediction
+fore3 = predict(m3, n.ahead=12*36, prediction.interval=T, level=0.95)
+plot(m3,fore3, col.predicted="deepskyblue", ylab = "CO2 Concentration",
+     main = "Seasonal Holt-Winters Forecast")
+```
+
+Just as in the model forecasts using harmonic analysis, we find similar predictions for 2030 (about 440 ppm of atmospheric CO2 concentration) and for 2050 (about 500 ppm). We also observe that in the best case scenario (the lower bound of the confidence interval for the predictions) atmospheric CO2 would continue increasing at a worrying rate.
+
+# 4. NEURAL NETWORKS TECHNIQUES
+
+Neural Networks have become very popular these days, and one of their application areas is the forecasting of time series. These models lack interpretability, but the predictions made are usually very good. In this project, we will make use of Neural Networks Autoregression models to predict the atmospheric CO2 concentration both in the testing period (2020-2023) and in the future.
+
+## 4.1. Default model
+
+First, we are going to use the `nnetar` function without specifying the parameters:
+
+```{r, comment="", warning=FALSE, message=FALSE}
+# We load the library
+library(forecast)
+
+# We train the model
+model_nn <- nnetar(ts_train)
+model_nn
+```
+
+What this output is telling us is the following:
+
+* The model is applied to the time series `ts_train`
+* The model used is NNAR(1,1,2)[12]: the seasonality is of 12 months, 2 is the number of neurons in the hidden layer and the model uses observations $y_{t-1}$ and $y_{t-12}$ to predict $y_t$. 
+* The predictions are the average of the predictions of 20 models.
+
+```{r, comment=""}
+# We make predictions for the next 4 years
+predicted <- forecast(model_nn, h=12*4, bootstrap = TRUE, PI=TRUE)
+autoplot(predicted, xlab = "Year", ylab = "Atmospheric CO2 concentration",
+ main = "Predicted CO2 concentration using NN, default parameters (2020-2023)")
+```
+
+```{r, comment=""}
+# Calculate MSE
+mse <- mean((ts_test-predicted$mean)^2)
+mse
+```
+
+```{r, comment="", warning=FALSE}
+# Plot the predictions with the 95% CI
+fore <- ts(predicted$mean, start = c(2020,1), freq=12)
+fore_upper_95 <- ts(predicted$upper[,2], start = c(2020,1), freq=12)
+fore_lower_95 <- ts(predicted$lower[,2], start = c(2020,1), freq=12)
+ts.plot(ts_test, fore, fore_lower_95, fore_upper_95 ,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), ylab="CO2 Concentration",
+        main="Forecast with NN, default parameters (2020-2023)")
+legend("topleft", legend=c("Observed data", "Prediction",
+                           "Lower 95% prediction", "Upper 95% prediction"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=1.5)
+```
+
+The $MSE$ is low, similar than the deterministic-harmonic model but higher than the one obtained with Holt-Winters model. We could say that in general the predictions are good, and the confidence intervals are really narrow.
+
+## 4.2. Model specifying the parameters
+
+Now, we will try to improve the predictions specifying the parameters of the model, instead of letting the algorithm select them.
+
+```{r, comment="", warning=FALSE, message=FALSE}
+# We train the model
+model_nn_2 <- nnetar(ts_train, p=2, P=2)
+model_nn_2
+```
+
+In this case we use observations $y_{t-1}$, $y_{t-2}$, $y_{t-12}$ and $y_{t-24}$ to predict $y_t$, and we use 2 neurons in the hidden layer.
+
+```{r, comment=""}
+# We make predictions for the next 4 years
+predicted_2 <- forecast(model_nn_2, h=12*4, bootstrap = TRUE, PI=TRUE)
+autoplot(predicted_2, xlab = "Year", ylab = "Atmospheric CO2 concentration",
+ main = "Predicted CO2 concentration using NN, selected parameters (2020-2023)")
+```
+
+```{r, comment=""}
+# Calculate MSE
+mse <- mean((ts_test-predicted_2$mean)^2)
+mse
+```
+
+The $MSE$ is higher in this case.
+
+```{r, comment="", warning=FALSE}
+# Plot the predictions with the 95% CI
+fore_2 <- ts(predicted_2$mean, start = c(2020,1), freq=12)
+fore_upper_95_2 <- ts(predicted_2$upper[,2], start = c(2020,1), freq=12)
+fore_lower_95_2 <- ts(predicted_2$lower[,2], start = c(2020,1), freq=12)
+ts.plot(ts_test, fore_2, fore_lower_95_2, fore_upper_95_2 ,
+        col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), ylab="CO2 Concentration",
+        main="Forecast with NN, parameters selected by hand (2020-2023)")
+legend("topleft", legend=c("Observed data", "Prediction",
+                           "Lower 95% prediction", "Upper 95% prediction"),
+       col=c("darkblue", "deepskyblue", "lightblue", "lightblue"), lty=1, lwd=1.5)
+```
+
+We can see that the predictions are worse with the model $NNAR(2,2,2)_{12}$ than with $NNAR(1,1,2)_{12}$. What this models share is that they tend to underestimate the C02 concentration.
+
+# 5. MACHINE LEARNING FORECASTING WITH `skforecast`
+
+In this final section we will use the `skforecast` library in Python to make predictions. This is a Machine Leaning library that facilitates the use of ML regression models oriented to the forecasting of time series. We will work with Python in RStudio by means of the R library `reticulate`.
+
+```{r, warning=FALSE, comment="", message=FALSE}
+# Import the package reticulate
+library(reticulate)
+```
+
+First of all, we load the Python libraries that we need:
+
+```{python, message=FALSE, warning=FALSE, comment=""}
+# Import numpy, pandas and matplotlib
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt 
+```
+
+In this case, we are going to make predictions just for one year, as the predictions from autoregressive models tend to stabilize in the long term. We load the time series and show it in a plot:
+
+```{python, comment=""}
+# Load the series
+data = pd.read_csv("co2_mm_mlo_prepared.csv", sep=",")
+
+# Select the 4th column (monthly average concentration of CO2)
+ts = data.iloc[:,3]
+
+# Split the data into train and test, with test
+ts_train = pd.Series(ts.iloc[1:777])
+ts_test = pd.Series(ts.iloc[777:])
+
+# Plot the time series
+plt.figure()
+plt.plot(ts_train, label="Training data") 
+plt.plot(ts_test, label="Testing data") 
+plt.xlabel("Months") 
+plt.ylabel("CO2 concentration") 
+plt.title("Original Series") 
+plt.legend() 
+plt.show() 
+```
+
+More precisely, we will use the function `ForecasterAutoreg` to train an autoregressive model, making use of a `RandomForestRegressor` and the 12 previous observations.
+
+```{python, comment=""}
+# Import the functions we need to model the time series
+from sklearn.ensemble import RandomForestRegressor
+from skforecast.ForecasterAutoreg import ForecasterAutoreg
+
+# Define the forecaster and the lags
+forecaster = ForecasterAutoreg(regressor = RandomForestRegressor(random_state=123),
+lags= 12)
+
+# Train the model
+forecaster.fit(y=pd.Series(ts_train))
+
+# Show the information about the forecaster
+forecaster
+```
+
+Now we make predictions and plot them against the original series:
+
+```{python, comment=""}
+# Define the number of months we want to predict
+steps = 13
+
+# Make the predictions
+predictions = forecaster.predict(steps=steps)
+
+# Show the first predicted values
+predictions.head(5)
+```
+
+```{python, comment=""}
+# Plot the time series vs the predictions
+plt.figure()
+plt.plot(ts_test, label="Original data") 
+plt.plot(predictions, label="Predictions") 
+plt.xlabel("Months") 
+plt.ylabel("CO2 concentration") 
+plt.title("Pridictions with RandomForestRegressor (default parameters)") 
+plt.legend() 
+plt.show() 
+```
+
+We can see that the predictions are not very good around the peak, but reasonably good far from the peak. The $MSE$ is the following:
+
+```{python, comment=""}
+# Import the mean_squared_error function
+from sklearn.metrics import mean_squared_error
+
+# Compute the MSE
+error_mse = mean_squared_error(y_true = ts_test,y_pred = predictions)
+
+# Print it
+print(f"Test error (MSE): {error_mse}")
+```
+
+Therefore, the `RandomForestRegressor` is worse than the previous models (Deterministic, Holt-Winters with seasonality, NN). We will try to improve the predictions by performing a hyperparameter tuning:
+
+```{python, comment=""}
+# Hide progress bar
+from tqdm import tqdm
+from functools import partialmethod
+tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
+
+# Import the grid search forecaster
+from skforecast.model_selection import grid_search_forecaster
+
+# Select the number of steps to predict
+steps = 13
+
+# Define the forecaster
+forecaster = ForecasterAutoreg(regressor = RandomForestRegressor(random_state=123), lags= 12)
+
+# Define the candidate hyperparameter values
+param_grid = {
+    'n_estimators': [10, 50, 100],
+    'max_depth': [1, 3, 5, 10, None]
+}
+
+# Define the forecaster
+results_grid = grid_search_forecaster(
+                   forecaster         = forecaster,
+                   y                  = ts_train,
+                   param_grid         = param_grid,
+                   steps              = steps,
+                   refit              = False,
+                   metric             = 'mean_squared_error',
+                   initial_train_size = int(len(ts_train)*0.5),
+                   fixed_train_size   = False,
+                   return_best        = True,
+                   n_jobs             = -1,     # Define n_jobs=-1 to speed up the computations
+                   verbose            = False
+               )
+               
+# Show the results
+results_grid
+```
+
+According to this output, the best hyperparameters are `max_depth` = `None`, `n_estimators` = $50$. We make the predictions using them, and we plot the predictions against the original series.
+
+```{python, comment=""}
+# Make the predictions
+predictions = forecaster.predict(steps=steps)
+
+# Show the first predicted values
+predictions.head(5)
+```
+
+```{python, comment=""}
+# Plot the time series vs the predictions
+plt.figure()
+plt.plot(ts_test, label="Original data") 
+plt.plot(predictions, label="Predictions") 
+plt.xlabel("Months") 
+plt.ylabel("CO2 concentration") 
+plt.title("Pridictions with RandomForestRegressor (best parameters)") 
+plt.legend() 
+plt.show() 
+```
+
+Again, we compute the $MSE$:
+
+```{python, comment=""}
+# Compute the MSE
+error_mse = mean_squared_error(y_true = ts_test,y_pred = predictions)
+
+# Print it 
+print(f"Test error (MSE): {error_mse}")
+```
+
+We observe that the $MSE$ decreases with the parameters selected by hyperparameter tuning, but it is a really small decrease.
+
+We will also try another regressor to see whether the predictions improve: a `DecisionTreeRegressor`.
+
+```{python, comment=""}
+# Import the functions we need to model the time series
+from sklearn import tree
+
+# Define the forecaster
+forecaster = ForecasterAutoreg(regressor = tree.DecisionTreeRegressor(random_state=33), lags= 12)
+
+# Train the model
+forecaster.fit(y=pd.Series(ts_train))
+
+# Show the information about the forecaster
+forecaster
+```
+
+```{python, message=FALSE, warning=FALSE, comment=""}
+# Define the number of months we want to predict
+steps = 13
+
+# Make the predictions
+predictions = forecaster.predict(steps=steps)
+
+# Show the first predicted values
+predictions.head(5)
+```
+
+```{python, comment=""}
+# Plot the time series vs the predictions
+plt.figure()
+plt.plot(ts_test, label="Original data") 
+plt.plot(predictions, label="Predictions") 
+plt.xlabel("Months") 
+plt.ylabel("CO2 concentration") 
+plt.title("Pridictions with DecisionTreeRegressor (default parameters)") 
+plt.legend() 
+plt.show() 
+```
+  
+```{python, comment=""}
+# Compute the MSE
+error_mse = mean_squared_error(y_true = ts_test,y_pred = predictions)
+
+# Print it
+print(f"Test error (MSE): {error_mse}")
+``` 
+
+We observe a similar behavior and a slightly lower $MSE$ in comparison to the previous model: more or less good predictions far from the peak, and bad predictions around the peak. It seems that the Machine Learning regressors are not the best option to forecast a time series with this type of trend and seasonality.
+
+The guideline that we have used to develop these models can be found here:
+
+https://cienciadedatos.net/documentos/py27-time-series-forecasting-python-scikitlearn.html
+
+# 6. CONCLUSIONS
+
+After testing models from four different perspectives, the Holt-Winters model with seasonality had the best MSE of 0.1783. In second, the deterministic model with harmonic analysis had an MSE of 0.7069. In third, neural networks with default parameters had an MSE of 0.7229. Lastly, came the machine learning methods from `skforecast` in Python with and MSE of 2.2165, using the `DecisionTreeRegressor`.
+
+The two models with the best MSEs made similar predictions for atmospheric CO2 concentrations of approximately 440ppm by 2030 and 500ppm by 2050. As mentioned before, the farther out the predictions are made, the greater the uncertainty in the predictions. This can be seen in the Holt-Winters forecast where the confidence intervals widen as time goes on. For example, the Holt-Winters model has a 95% confidence interval of 436-445ppm (difference of 9ppm) in April 2030 versus an interval of 468-510ppm (difference of 42ppm) in April 2050. Furthermore, as the ecosystem is a complex network, there are likely unforeseen actors that could eventually affect the quantity of carbon dioxide in the atmosphere in unexpected ways.
+
+In this application, the machine learning models failed to perform at the level of the more traditional models. Perhaps this is related to the fact that we are modeling a natural phenomena with steady and regular intervals of change. For example, the seasonality of our model is based on the changing of months and seasonal weather patterns, which are quite consistent. We suspect that should our data have been more erratic/less regular, the machine learning models would have likely done a better job in terms of prediction compared to the best methods in this application.
+
+Overall, the conclusions from our predictions are alarming from the perspective of the earth's future and its capacity to support life. C02 levels are rising more and more rapidly (approximately quadratically) to unprecedented levels and not enough action is being taken to reduce humanity's carbon emissions. Given the business-like mindset of the most powerful players in our societies today, will it be possible to inspire change before it is too late? Take our predictions as a warning.
